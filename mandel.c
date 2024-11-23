@@ -6,10 +6,14 @@
 //  Converted to use jpg instead of BMP and other minor changes
 //  
 ///
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "jpegrw.h"
+#include <string.h>
+
+#define IMAGES_TO_GENERATE 50
 
 // local routines
 static int iteration_to_color( int i, int max );
@@ -34,10 +38,12 @@ int main( int argc, char *argv[] )
 	int    image_height = 1000;
 	int    max = 1000;
 
+	int	   num_processes = 1; // Determine number of processing
+
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h"))!=-1) {
+	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:n:h"))!=-1) {
 		switch(c) 
 		{
 			case 'x':
@@ -61,6 +67,9 @@ int main( int argc, char *argv[] )
 			case 'o':
 				outfile = optarg;
 				break;
+			case 'n':
+				num_processes = atoi(optarg);
+				break;
 			case 'h':
 				show_help();
 				exit(1);
@@ -74,20 +83,111 @@ int main( int argc, char *argv[] )
 	// Display the configuration of the image.
 	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
 
-	// Create a raw image of the appropriate size.
-	imgRawImage* img = initRawImage(image_width,image_height);
+	int images_per_process = IMAGES_TO_GENERATE / num_processes; // Number of images for each process
+	int remainder = IMAGES_TO_GENERATE % num_processes;	// Capture the remaining images
 
-	// Fill it with a black
-	setImageCOLOR(img,0);
+	int main_pid = getpid(); // Main PID of program
+	printf("MAIN PID: %d\n",main_pid);
+	int assignments[num_processes][2];
+	assignments[0][0] = getpid();
+	assignments[0][1] = 0;
 
-	// Compute the Mandelbrot image
-	compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
+	for (int i = 0; i < num_processes - 1; i++) {
+		if (getpid() == main_pid) { // Check if the main process calls
+			fork();
+			//printf("PID %d\n",getpid());
+			if (getpid() != main_pid && getpid() != 0) {
+				assignments[i + 1][0] = getpid();
+				assignments[i + 1][1] = i + 1;
+				//printf("PID %d\n",getpid());
+				//printf("ASSIGNMENT: %d %d\n", assignments[i + 1][0], assignments[i+1][1]);
+			}
+			
+		}
+	}
 
-	// Save the image in the stated file.
-	storeJpegImageFile(img,outfile);
+	int assignment_block; // Process assignment number
+	int start_value;	// Image start number
 
-	// free the mallocs
-	freeRawImage(img);
+	// Get process assignment and image start number
+	for (int i; i < num_processes; i++) {
+		//printf("%d %d\n",i,assignments[i][0]);
+		
+		if (assignments[i][0] == getpid()) {
+			printf("Assignment: %d %d\n",assignments[i][0], getpid());
+			assignment_block = i;
+			start_value = assignment_block * images_per_process;
+			//printf("%d\n",start_value);
+		}
+	}
+
+	// Generate images for processing block
+	for (int i = 1; i <= images_per_process; i++) {
+		char file_name[20];
+		
+		sprintf(file_name, "mandel%d.jpg",start_value + i);
+		
+		// Create a raw image of the appropriate size.
+		imgRawImage* img = initRawImage(image_width,image_height);
+
+		// Fill it with a black
+		setImageCOLOR(img,0);
+
+		// Set scaling
+		double current_xscale = xscale + 0.1 * (start_value + i);
+		double current_yscale = current_xscale / image_width * image_height;
+		
+		
+		// Compute the Mandelbrot image
+		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max);
+
+		// Save the image in the stated file.
+		storeJpegImageFile(img,file_name);
+
+		// free the mallocs
+		freeRawImage(img);
+		printf("%s\n",file_name);
+	}
+	
+	// Assign remainders
+	if (assignment_block < remainder) {
+		char file_name[20];
+		int image_number = images_per_process * num_processes + assignment_block + 1;
+		sprintf(file_name, "mandel%d.jpg",image_number);
+
+		// Create a raw image of the appropriate size.
+		imgRawImage* img = initRawImage(image_width,image_height);
+
+		// Fill it with a black
+		setImageCOLOR(img,0);
+
+		// Set scaling
+		double current_xscale = xscale + 0.2 * image_number; 
+		double current_yscale = current_xscale / image_width * image_height;
+
+		// Compute the Mandelbrot image
+		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max);
+
+		// Save the image in the stated file.
+		storeJpegImageFile(img,file_name);
+
+		// free the mallocs
+		freeRawImage(img);
+
+		printf("%s\n",file_name);
+	}
+
+	if (getpid() != main_pid) {
+		return 0;	// End process not main
+	} else {
+		for (int i = 0; i < num_processes - 1; i++) {
+			wait(NULL);	// Wait for other processes to end
+		}
+	}
+
+	//time_t end = time(NULL);
+
+	printf("\n\nCreation Completed\n");
 
 	return 0;
 }
