@@ -39,11 +39,12 @@ int main( int argc, char *argv[] )
 	int    max = 1000;
 
 	int	   num_processes = 1; // Determine number of processing
+	int    num_threads = 1; // Number of threads used for image gen
 
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:n:h"))!=-1) {
+	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:n:h:t"))!=-1) {
 		switch(c) 
 		{
 			case 'x':
@@ -73,6 +74,9 @@ int main( int argc, char *argv[] )
 			case 'h':
 				show_help();
 				exit(1);
+				break;
+			case 't':
+				num_threads = atoi(optarg);
 				break;
 		}
 	}
