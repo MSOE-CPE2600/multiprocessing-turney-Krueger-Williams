@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include "jpegrw.h"
 #include <string.h>
+#include <pthread.h>
 
 #define IMAGES_TO_GENERATE 50
 
@@ -22,6 +23,19 @@ static void compute_image( imgRawImage *img, double xmin, double xmax,
 									double ymin, double ymax, int max );
 static void show_help();
 
+static void* thread_separate();
+
+struct thread_data {
+	imgRawImage* img;
+	double xmin;
+	double xmax;
+	double ymin;
+	double ymax;
+	int max;
+	int height;
+	int width;
+	pthread_mutex_t mutex;
+};
 
 int main( int argc, char *argv[] )
 {
@@ -189,7 +203,6 @@ int main( int argc, char *argv[] )
 		}
 	}
 
-	//time_t end = time(NULL);
 
 	printf("\n\nCreation Completed\n");
 
@@ -230,16 +243,49 @@ Compute an entire Mandelbrot image, writing each point to the given bitmap.
 Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
 */
 
-void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
+void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max, int num_threads)
 {
-	int i,j;
+	/*int i,j;
 
 	int width = img->width;
+	int height = img->height;*/
+
+	struct thread_data *data = malloc(sizeof(struct thread_data)); // Create data structure for args
+	pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
+	
+
+	data->img = img;
+	data->max = max;
+	data->xmax = xmax;
+	data->xmin = xmin;
+	data->ymax = ymax;
+	data->ymin = ymin;
+	data->mutex = data_mutex;
+
+	pthread_t threads[num_threads];
 	int height = img->height;
+	int split_height = height / num_threads;
+	int split_height_remainder = height % num_threads;
 
-	// For every pixel in the image...
+	for (int i = 0; i < num_threads; i++) {
+		pthread_t ptid;
+		threads[i] = ptid;
+		// Lock and set height for thread
+		pthread_mutex_lock(&data_mutex);
 
-	for(j=0;j<height;j++) {
+		split_height = 
+
+		// Create thread
+		pthread_create(ptid, NULL, &thread_separate, data);
+	}
+
+	// Wait for the threads
+	for (int i = 0; i < num_threads; i++) {
+		pthread_join(threads[i], NULL);
+	}
+
+	free(data);
+	/*for(j=0;j<height;j++) {
 
 		for(i=0;i<width;i++) {
 
@@ -252,6 +298,33 @@ void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, doub
 
 			// Set the pixel in the bitmap.
 			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
+		}
+	}*/
+}
+
+void* thread_separate(void* arg) {
+	printf("Started a thread\n");
+	struct thread_data *data = arg;
+	int width = data->width;
+	int height = data->height;
+
+	// Unlock after retrieving height and width
+	pthread_mutex_unlock(&data->mutex);
+
+	int i, j;
+
+	for(j=0;j<height;j++) {
+		for(i=0;i<width;i++) {
+
+			// Determine the point in x,y space for that pixel.
+			double x = data->xmin + i*(data->xmax-data->xmin)/width;
+			double y = data->ymin + j*(data->ymax-data->ymin)/height;
+
+			// Compute the iterations at that point.
+			int iters = iterations_at_point(x,y,data->max);
+
+			// Set the pixel in the bitmap.
+			setPixelCOLOR(data->img,i,j,iteration_to_color(iters,data->max));
 		}
 	}
 }
