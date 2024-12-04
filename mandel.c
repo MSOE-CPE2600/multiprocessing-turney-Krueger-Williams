@@ -1,3 +1,13 @@
+/********************************************************************
+ *  Filename: mandel.c
+ *  Description: Provides a program that generates 50 mandelbrot
+ * 			images designed to be put into a movie
+ *  Author: Krueger 'Mac' Williams
+ *  Date:  12/4/2024
+ *  Note: compile with make
+ * 			execute with ./mandel -h
+ *******************************************************************/
+
 /// 
 //  mandel.c
 //  Based on example code found here:
@@ -20,7 +30,7 @@
 static int iteration_to_color( int i, int max );
 static int iterations_at_point( double x, double y, int max );
 static void compute_image( imgRawImage *img, double xmin, double xmax,
-									double ymin, double ymax, int max );
+									double ymin, double ymax, int max, int num_threads );
 static void show_help();
 
 static void* thread_separate();
@@ -34,6 +44,7 @@ struct thread_data {
 	int max;
 	int height;
 	int width;
+	int start_height;
 	pthread_mutex_t mutex;
 };
 
@@ -57,8 +68,7 @@ int main( int argc, char *argv[] )
 
 	// For each command line argument given,
 	// override the appropriate configuration value.
-
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:n:h:t"))!=-1) {
+	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:n:t:h"))!=-1) {
 		switch(c) 
 		{
 			case 'x':
@@ -85,12 +95,12 @@ int main( int argc, char *argv[] )
 			case 'n':
 				num_processes = atoi(optarg);
 				break;
+			case 't':
+				num_threads = atoi(optarg);
+				break;
 			case 'h':
 				show_help();
 				exit(1);
-				break;
-			case 't':
-				num_threads = atoi(optarg);
 				break;
 		}
 	}
@@ -113,12 +123,9 @@ int main( int argc, char *argv[] )
 	for (int i = 0; i < num_processes - 1; i++) {
 		if (getpid() == main_pid) { // Check if the main process calls
 			fork();
-			//printf("PID %d\n",getpid());
 			if (getpid() != main_pid && getpid() != 0) {
 				assignments[i + 1][0] = getpid();
 				assignments[i + 1][1] = i + 1;
-				//printf("PID %d\n",getpid());
-				//printf("ASSIGNMENT: %d %d\n", assignments[i + 1][0], assignments[i+1][1]);
 			}
 			
 		}
@@ -135,7 +142,6 @@ int main( int argc, char *argv[] )
 			printf("Assignment: %d %d\n",assignments[i][0], getpid());
 			assignment_block = i;
 			start_value = assignment_block * images_per_process;
-			//printf("%d\n",start_value);
 		}
 	}
 
@@ -157,7 +163,7 @@ int main( int argc, char *argv[] )
 		
 		
 		// Compute the Mandelbrot image
-		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max);
+		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max, num_threads);
 
 		// Save the image in the stated file.
 		storeJpegImageFile(img,file_name);
@@ -184,7 +190,7 @@ int main( int argc, char *argv[] )
 		double current_yscale = current_xscale / image_width * image_height;
 
 		// Compute the Mandelbrot image
-		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max);
+		compute_image(img, xcenter - current_xscale / 2, xcenter + current_xscale / 2, ycenter - current_yscale / 2, ycenter + current_yscale / 2, max, num_threads);
 
 		// Save the image in the stated file.
 		storeJpegImageFile(img,file_name);
@@ -245,88 +251,75 @@ Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
 
 void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max, int num_threads)
 {
-	/*int i,j;
-
-	int width = img->width;
-	int height = img->height;*/
-
-	struct thread_data *data = malloc(sizeof(struct thread_data)); // Create data structure for args
-	pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
-	
-
-	data->img = img;
-	data->max = max;
-	data->xmax = xmax;
-	data->xmin = xmin;
-	data->ymax = ymax;
-	data->ymin = ymin;
-	data->mutex = data_mutex;
-
+    // Create array of threads
 	pthread_t threads[num_threads];
-	int height = img->height;
-	int split_height = height / num_threads;
-	int split_height_remainder = height % num_threads;
 
-	for (int i = 0; i < num_threads; i++) {
-		pthread_t ptid;
-		threads[i] = ptid;
-		// Lock and set height for thread
-		pthread_mutex_lock(&data_mutex);
+    int height = img->height;	// Get image height
+    int split_height = height / num_threads;	// Divide height by threads
 
-		split_height = 
+    for (int i = 0; i < num_threads; i++) {
+        struct thread_data *data = malloc(sizeof(struct thread_data)); // Allocate separate data for each thread
+        data->img = img;
+        data->max = max;
+        data->xmax = xmax;
+        data->xmin = xmin;
+        data->ymax = ymax;
+        data->ymin = ymin;
+        data->width = img->width;
 
-		// Create thread
-		pthread_create(ptid, NULL, &thread_separate, data);
-	}
+        // Set starting and ending height for each thread
+        data->start_height = i * split_height;
 
-	// Wait for the threads
-	for (int i = 0; i < num_threads; i++) {
-		pthread_join(threads[i], NULL);
-	}
-
-	free(data);
-	/*for(j=0;j<height;j++) {
-
-		for(i=0;i<width;i++) {
-
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
-
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
+		// Check if last thread
+        if (i == num_threads - 1) {
+			data->height = height;
+		} else {
+			// Give last thread any remaining rows
+			data->height = (i + 1) * split_height;
 		}
-	}*/
+
+
+        // Create thread
+        int result = pthread_create(&threads[i], NULL, &thread_separate, data);
+        if (result != 0) {
+            printf("Unable to make thread\n");
+            free(data);
+        }
+    }
+
+    // Wait for the threads
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
 }
 
+// Method for threads designed to process a set part of the image
 void* thread_separate(void* arg) {
-	printf("Started a thread\n");
-	struct thread_data *data = arg;
-	int width = data->width;
-	int height = data->height;
+    struct thread_data *data = arg;
+    int width = data->width;
+    int start_height = data->start_height;
+    int end_height = data->height;
+    int total_height = data->img->height;
+    int i, j;
 
-	// Unlock after retrieving height and width
-	pthread_mutex_unlock(&data->mutex);
+	// Process specific region of image
+    for (j = start_height; j < end_height; j++) {
+        for (i = 0; i < width; i++) {
+            // Determine the point in x, y space for that pixel.
+            double x = data->xmin + i * (data->xmax - data->xmin) / width;
+            double y = data->ymin + j * (data->ymax - data->ymin) / total_height;
 
-	int i, j;
+            // Compute the iterations at that point.
+            int iters = iterations_at_point(x, y, data->max);
 
-	for(j=0;j<height;j++) {
-		for(i=0;i<width;i++) {
+            // Set the pixel in the bitmap.
+            setPixelCOLOR(data->img, i, j, iteration_to_color(iters, data->max));
+        }
+    }
 
-			// Determine the point in x,y space for that pixel.
-			double x = data->xmin + i*(data->xmax-data->xmin)/width;
-			double y = data->ymin + j*(data->ymax-data->ymin)/height;
-
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,data->max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(data->img,i,j,iteration_to_color(iters,data->max));
-		}
-	}
+	// Free data structure passed to thread
+    free(data);
+    return NULL;
 }
 
 
